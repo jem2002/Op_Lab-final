@@ -1,5 +1,0 @@
-# Dependencias para el Optimizador No Lineal
-sympy>=1.12
-numpy>=1.24.0
-scipy>=1.10.0
-customtkinter>=5.2.0

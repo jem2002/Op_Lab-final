@@ -1,11 +1,3 @@
-#!/usr/bin/env python3
-"""
-Optimizador KKT - Condiciones de Karush-Kuhn-Tucker
-
-Este módulo implementa la resolución de problemas de optimización no lineal
-con restricciones de desigualdad usando las condiciones KKT.
-"""
-
 import sympy as sp
 from sympy import symbols, diff, solve, pprint, latex, And, Or
 import numpy as np
@@ -26,8 +18,11 @@ class OptimizadorKKT:
         self.multiplicadores_mu = []  # Para restricciones de desigualdad
         self.lagrangiana_kkt = None
         self.gradiente_lagrangiana = []
+        self.hessiana_lagrangiana = None
+        self.hessiana_orlada_kkt = None
         self.puntos_kkt = []
         self.condiciones_kkt = []
+        self.clasificacion_puntos = []
     
     def definir_variables(self, nombres_variables: List[str]):
         """
@@ -317,6 +312,301 @@ class OptimizadorKKT:
                     valor_mu = solucion[mu]
                     if valor_mu < 0:
                         return False
+        except Exception as e:
+            print(f"Error al verificar factibilidad dual: {e}")
+            return False
+    
+    def calcular_hessiana_lagrangiana_kkt(self):
+        """
+        Calcula la matriz Hessiana de la Lagrangiana KKT con respecto a las variables originales
+        
+        Returns:
+            Matriz Hessiana de la Lagrangiana KKT
+        """
+        if self.lagrangiana_kkt is None:
+            print("Error: Primero debe construir la Lagrangiana KKT")
+            return None
+        
+        n = len(self.variables)
+        self.hessiana_lagrangiana = sp.zeros(n, n)
+        
+        print("\nCalculando matriz Hessiana de la Lagrangiana KKT...")
+        print("H_L = [")
+        
+        for i in range(n):
+            for j in range(n):
+                # Calcular la segunda derivada parcial ∂²L/∂xi∂xj
+                segunda_derivada = diff(self.lagrangiana_kkt, self.variables[i], self.variables[j])
+                self.hessiana_lagrangiana[i, j] = segunda_derivada
+        
+        # Mostrar la matriz Hessiana
+        for i in range(n):
+            fila = "  ["
+            for j in range(n):
+                if j > 0:
+                    fila += ", "
+                fila += f"∂²L/∂{self.variables[i]}∂{self.variables[j]} = {self.hessiana_lagrangiana[i, j]}"
+            fila += "]"
+            print(fila)
+        
+        print("]")
+        
+        return self.hessiana_lagrangiana
+    
+    def calcular_hessiana_orlada_kkt(self):
+        """
+        Calcula la matriz Hessiana orlada para problemas KKT
+        (incluye restricciones de igualdad y desigualdad activas)
+        
+        Returns:
+            Matriz Hessiana orlada KKT
+        """
+        if self.hessiana_lagrangiana is None:
+            self.calcular_hessiana_lagrangiana_kkt()
+        
+        n = len(self.variables)  # número de variables
+        m_eq = len(self.restricciones_igualdad)  # número de restricciones de igualdad
+        m_ineq = len(self.restricciones_desigualdad)  # número de restricciones de desigualdad
+        
+        # Para KKT, consideramos todas las restricciones (activas e inactivas se determinan por μ)
+        total_restricciones = m_eq + m_ineq
+        
+        # La matriz orlada tiene dimensión (n + total_restricciones) x (n + total_restricciones)
+        self.hessiana_orlada_kkt = sp.zeros(n + total_restricciones, n + total_restricciones)
+        
+        print("\nCalculando matriz Hessiana orlada KKT...")
+        
+        # Bloque superior izquierdo: Hessiana de la Lagrangiana
+        for i in range(n):
+            for j in range(n):
+                self.hessiana_orlada_kkt[i, j] = self.hessiana_lagrangiana[i, j]
+        
+        # Procesar restricciones de igualdad
+        for k, restriccion in enumerate(self.restricciones_igualdad):
+            # Bloque superior derecho: gradientes de restricciones de igualdad
+            for i in range(n):
+                grad_restriccion = diff(restriccion, self.variables[i])
+                self.hessiana_orlada_kkt[i, n + k] = grad_restriccion
+            
+            # Bloque inferior izquierdo: gradientes de restricciones de igualdad (transpuesto)
+            for j in range(n):
+                grad_restriccion = diff(restriccion, self.variables[j])
+                self.hessiana_orlada_kkt[n + k, j] = grad_restriccion
+        
+        # Procesar restricciones de desigualdad
+        for k, restriccion in enumerate(self.restricciones_desigualdad):
+            idx = n + m_eq + k
+            # Bloque superior derecho: gradientes de restricciones de desigualdad
+            for i in range(n):
+                grad_restriccion = diff(restriccion, self.variables[i])
+                self.hessiana_orlada_kkt[i, idx] = grad_restriccion
+            
+            # Bloque inferior izquierdo: gradientes de restricciones de desigualdad (transpuesto)
+            for j in range(n):
+                grad_restriccion = diff(restriccion, self.variables[j])
+                self.hessiana_orlada_kkt[idx, j] = grad_restriccion
+        
+        # Bloque inferior derecho: ceros
+        for i in range(total_restricciones):
+            for j in range(total_restricciones):
+                self.hessiana_orlada_kkt[n + i, n + j] = 0
+        
+        print(f"Matriz Hessiana orlada KKT de dimensión {n + total_restricciones}x{n + total_restricciones}:")
+        print("H_orlada_KKT = [")
+        for i in range(min(n + total_restricciones, 6)):  # Mostrar solo las primeras 6 filas para evitar salida muy larga
+            fila = "  ["
+            for j in range(min(n + total_restricciones, 6)):
+                if j > 0:
+                    fila += ", "
+                fila += f"{self.hessiana_orlada_kkt[i, j]}"
+            if n + total_restricciones > 6:
+                fila += ", ..."
+            fila += "]"
+            print(fila)
+        if n + total_restricciones > 6:
+            print("  ...")
+        print("]")
+        
+        return self.hessiana_orlada_kkt
+    
+    def identificar_restricciones_activas(self, punto):
+        """
+        Identifica qué restricciones de desigualdad están activas en un punto KKT
+        
+        Args:
+            punto: Diccionario con los valores del punto KKT
+        
+        Returns:
+            Lista de índices de restricciones activas
+        """
+        vars_originales = {var: punto.get(var, var) for var in self.variables if var in punto}
+        restricciones_activas = []
+        
+        print("\nIdentificando restricciones activas:")
+        
+        # Verificar restricciones de desigualdad
+        for i, restriccion in enumerate(self.restricciones_desigualdad):
+            valor_restriccion = restriccion.subs(vars_originales)
+            mu_correspondiente = self.multiplicadores_mu[i] if i < len(self.multiplicadores_mu) else None
+            valor_mu = punto.get(mu_correspondiente, 0) if mu_correspondiente else 0
+            
+            try:
+                val_rest_num = float(valor_restriccion)
+                val_mu_num = float(valor_mu)
+                
+                # Una restricción está activa si g(x) ≈ 0 o μ > 0
+                if abs(val_rest_num) < 1e-6 or val_mu_num > 1e-6:
+                    restricciones_activas.append(i)
+                    print(f"  Restricción {i+1}: g_{i+1}(x) = {val_rest_num:.6f}, μ_{i+1} = {val_mu_num:.6f} (ACTIVA)")
+                else:
+                    print(f"  Restricción {i+1}: g_{i+1}(x) = {val_rest_num:.6f}, μ_{i+1} = {val_mu_num:.6f} (inactiva)")
+            
+            except (ValueError, TypeError):
+                print(f"  Restricción {i+1}: No se pudo evaluar numéricamente")
+        
+        return restricciones_activas
+    
+    def clasificar_punto_kkt(self, punto):
+        """
+        Clasifica un punto KKT usando el criterio de la segunda derivada
+        
+        Args:
+            punto: Diccionario con los valores del punto KKT
+        
+        Returns:
+            String con la clasificación del punto
+        """
+        if self.hessiana_orlada_kkt is None:
+            print("Error: Primero debe calcular la matriz Hessiana orlada KKT")
+            return "No clasificado"
+        
+        # Extraer solo las variables originales del punto
+        vars_originales = {var: punto.get(var, var) for var in self.variables if var in punto}
+        
+        if not vars_originales:
+            return "No se pudieron extraer las variables originales"
+        
+        try:
+            # Identificar restricciones activas
+            restricciones_activas = self.identificar_restricciones_activas(punto)
+            
+            # Evaluar la Hessiana orlada en el punto crítico
+            hessiana_evaluada = self.hessiana_orlada_kkt.subs(vars_originales)
+            
+            n = len(self.variables)
+            m_eq = len(self.restricciones_igualdad)
+            m_activas = len(restricciones_activas)
+            
+            print(f"\nAnalizando punto KKT con {n} variables, {m_eq} restricciones de igualdad y {m_activas} restricciones activas...")
+            
+            # Para problemas KKT, el análisis depende de las restricciones activas
+            # Construir la matriz Hessiana orlada reducida considerando solo restricciones activas
+            
+            if m_eq == 0 and m_activas == 0:
+                # Sin restricciones activas: análisis estándar de la Hessiana
+                hessiana_reducida = hessiana_evaluada[:n, :n]
+                try:
+                    autovalores = hessiana_reducida.eigenvals()
+                    autovalores_numericos = [complex(val).real for val in autovalores.keys()]
+                    
+                    todos_positivos = all(val > 1e-10 for val in autovalores_numericos)
+                    todos_negativos = all(val < -1e-10 for val in autovalores_numericos)
+                    
+                    if todos_positivos:
+                        return f"Mínimo local (sin restricciones activas, autovalores > 0: {autovalores_numericos})"
+                    elif todos_negativos:
+                        return f"Máximo local (sin restricciones activas, autovalores < 0: {autovalores_numericos})"
+                    else:
+                        return f"Punto de silla (sin restricciones activas, autovalores mixtos: {autovalores_numericos})"
+                
+                except Exception as e:
+                    return f"Error al analizar sin restricciones activas: {e}"
+            
+            else:
+                # Con restricciones activas: análisis de la matriz orlada
+                total_restricciones_activas = m_eq + m_activas
+                
+                # Calcular determinantes de submatrices relevantes
+                determinantes = []
+                
+                for k in range(total_restricciones_activas + 1, n + total_restricciones_activas + 1):
+                    if k <= hessiana_evaluada.rows:
+                        submatriz = hessiana_evaluada[:k, :k]
+                        try:
+                            det = float(submatriz.det())
+                            determinantes.append(det)
+                            print(f"  Determinante de submatriz {k}x{k}: {det:.6f}")
+                        except Exception as e:
+                            print(f"  Error calculando determinante {k}x{k}: {e}")
+                            determinantes.append(None)
+                
+                # Filtrar determinantes válidos
+                dets_validos = [d for d in determinantes if d is not None]
+                
+                if not dets_validos:
+                    return "No se pudieron evaluar los determinantes"
+                
+                # Análisis de los determinantes para clasificación KKT
+                if len(dets_validos) == 1:
+                    det = dets_validos[0]
+                    signo_esperado = (-1) ** total_restricciones_activas
+                    if det * signo_esperado > 0:
+                        return f"Mínimo local condicionado KKT (det={det:.6f}, {m_activas} restricciones activas)"
+                    elif det * signo_esperado < 0:
+                        return f"Máximo local condicionado KKT (det={det:.6f}, {m_activas} restricciones activas)"
+                    else:
+                        return f"Criterio no concluyente KKT (det={det:.6f})"
+                
+                else:
+                    # Análisis más complejo para múltiples determinantes
+                    signos = [1 if d > 0 else -1 if d < 0 else 0 for d in dets_validos]
+                    
+                    # Verificar patrón para mínimo/máximo
+                    patron_minimo = True
+                    patron_maximo = True
+                    
+                    for i, signo in enumerate(signos):
+                        signo_esperado_min = (-1) ** (total_restricciones_activas + i + 1)
+                        signo_esperado_max = (-1) ** total_restricciones_activas
+                        
+                        if signo != signo_esperado_min:
+                            patron_minimo = False
+                        if signo != signo_esperado_max:
+                            patron_maximo = False
+                    
+                    if patron_minimo:
+                        return f"Mínimo local condicionado KKT ({m_activas} restricciones activas, dets={dets_validos})"
+                    elif patron_maximo:
+                        return f"Máximo local condicionado KKT ({m_activas} restricciones activas, dets={dets_validos})"
+                    else:
+                        return f"Punto de silla o indeterminado KKT ({m_activas} restricciones activas, dets={dets_validos})"
+        
+        except Exception as e:
+            return f"Error en la clasificación KKT: {e}"
+    
+    def analizar_puntos_kkt(self):
+        """
+        Analiza y clasifica todos los puntos KKT encontrados
+        """
+        if not self.puntos_kkt:
+            print("Error: Primero debe encontrar los puntos KKT")
+            return
+        
+        if self.hessiana_orlada_kkt is None:
+            self.calcular_hessiana_orlada_kkt()
+        
+        self.clasificacion_puntos = []
+        
+        print("\nClasificando puntos KKT usando el criterio de la segunda derivada...")
+        
+        for i, punto in enumerate(self.puntos_kkt):
+            if isinstance(punto, dict):
+                clasificacion = self.clasificar_punto_kkt(punto)
+                self.clasificacion_puntos.append(clasificacion)
+                print(f"\nPunto KKT {i+1}: {clasificacion}")
+            else:
+                self.clasificacion_puntos.append("Formato de punto no soportado")
+                print(f"\nPunto KKT {i+1}: Formato no soportado para clasificación")
             
             # Verificar restricciones de desigualdad: g(x) ≤ 0
             vars_originales = {var: solucion.get(var, var) for var in self.variables}
@@ -324,6 +614,298 @@ class OptimizadorKKT:
                 valor_restriccion = restriccion.subs(vars_originales)
                 if valor_restriccion > 0:
                     return False
+    
+    def calcular_hessiana_lagrangiana_kkt(self):
+        """
+        Calcula la matriz Hessiana de la Lagrangiana KKT con respecto a las variables originales
+        
+        Returns:
+            Matriz Hessiana de la Lagrangiana KKT
+        """
+        if self.lagrangiana_kkt is None:
+            print("Error: Primero debe construir la Lagrangiana KKT")
+            return None
+        
+        n = len(self.variables)
+        self.hessiana_lagrangiana = sp.zeros(n, n)
+        
+        print("\nCalculando matriz Hessiana de la Lagrangiana KKT...")
+        print("H_L = [")
+        
+        for i in range(n):
+            for j in range(n):
+                # Calcular la segunda derivada parcial ∂²L/∂xi∂xj
+                segunda_derivada = diff(self.lagrangiana_kkt, self.variables[i], self.variables[j])
+                self.hessiana_lagrangiana[i, j] = segunda_derivada
+        
+        # Mostrar la matriz Hessiana
+        for i in range(n):
+            fila = "  ["
+            for j in range(n):
+                if j > 0:
+                    fila += ", "
+                fila += f"∂²L/∂{self.variables[i]}∂{self.variables[j]} = {self.hessiana_lagrangiana[i, j]}"
+            fila += "]"
+            print(fila)
+        
+        print("]")
+        
+        return self.hessiana_lagrangiana
+    
+    def calcular_hessiana_orlada_kkt(self):
+        """
+        Calcula la matriz Hessiana orlada para problemas KKT
+        (incluye restricciones de igualdad y desigualdad activas)
+        
+        Returns:
+            Matriz Hessiana orlada KKT
+        """
+        if self.hessiana_lagrangiana is None:
+            self.calcular_hessiana_lagrangiana_kkt()
+        
+        n = len(self.variables)  # número de variables
+        m_eq = len(self.restricciones_igualdad)  # número de restricciones de igualdad
+        m_ineq = len(self.restricciones_desigualdad)  # número de restricciones de desigualdad
+        
+        # Para KKT, consideramos todas las restricciones (activas e inactivas se determinan por μ)
+        total_restricciones = m_eq + m_ineq
+        
+        # La matriz orlada tiene dimensión (n + total_restricciones) x (n + total_restricciones)
+        self.hessiana_orlada_kkt = sp.zeros(n + total_restricciones, n + total_restricciones)
+        
+        print("\nCalculando matriz Hessiana orlada KKT...")
+        
+        # Bloque superior izquierdo: Hessiana de la Lagrangiana
+        for i in range(n):
+            for j in range(n):
+                self.hessiana_orlada_kkt[i, j] = self.hessiana_lagrangiana[i, j]
+        
+        # Procesar restricciones de igualdad
+        for k, restriccion in enumerate(self.restricciones_igualdad):
+            # Bloque superior derecho: gradientes de restricciones de igualdad
+            for i in range(n):
+                grad_restriccion = diff(restriccion, self.variables[i])
+                self.hessiana_orlada_kkt[i, n + k] = grad_restriccion
+            
+            # Bloque inferior izquierdo: gradientes de restricciones de igualdad (transpuesto)
+            for j in range(n):
+                grad_restriccion = diff(restriccion, self.variables[j])
+                self.hessiana_orlada_kkt[n + k, j] = grad_restriccion
+        
+        # Procesar restricciones de desigualdad
+        for k, restriccion in enumerate(self.restricciones_desigualdad):
+            idx = n + m_eq + k
+            # Bloque superior derecho: gradientes de restricciones de desigualdad
+            for i in range(n):
+                grad_restriccion = diff(restriccion, self.variables[i])
+                self.hessiana_orlada_kkt[i, idx] = grad_restriccion
+            
+            # Bloque inferior izquierdo: gradientes de restricciones de desigualdad (transpuesto)
+            for j in range(n):
+                grad_restriccion = diff(restriccion, self.variables[j])
+                self.hessiana_orlada_kkt[idx, j] = grad_restriccion
+        
+        # Bloque inferior derecho: ceros
+        for i in range(total_restricciones):
+            for j in range(total_restricciones):
+                self.hessiana_orlada_kkt[n + i, n + j] = 0
+        
+        print(f"Matriz Hessiana orlada KKT de dimensión {n + total_restricciones}x{n + total_restricciones}:")
+        print("H_orlada_KKT = [")
+        for i in range(min(n + total_restricciones, 6)):  # Mostrar solo las primeras 6 filas para evitar salida muy larga
+            fila = "  ["
+            for j in range(min(n + total_restricciones, 6)):
+                if j > 0:
+                    fila += ", "
+                fila += f"{self.hessiana_orlada_kkt[i, j]}"
+            if n + total_restricciones > 6:
+                fila += ", ..."
+            fila += "]"
+            print(fila)
+        if n + total_restricciones > 6:
+            print("  ...")
+        print("]")
+        
+        return self.hessiana_orlada_kkt
+    
+    def identificar_restricciones_activas(self, punto):
+        """
+        Identifica qué restricciones de desigualdad están activas en un punto KKT
+        
+        Args:
+            punto: Diccionario con los valores del punto KKT
+        
+        Returns:
+            Lista de índices de restricciones activas
+        """
+        vars_originales = {var: punto.get(var, var) for var in self.variables if var in punto}
+        restricciones_activas = []
+        
+        print("\nIdentificando restricciones activas:")
+        
+        # Verificar restricciones de desigualdad
+        for i, restriccion in enumerate(self.restricciones_desigualdad):
+            valor_restriccion = restriccion.subs(vars_originales)
+            mu_correspondiente = self.multiplicadores_mu[i] if i < len(self.multiplicadores_mu) else None
+            valor_mu = punto.get(mu_correspondiente, 0) if mu_correspondiente else 0
+            
+            try:
+                val_rest_num = float(valor_restriccion)
+                val_mu_num = float(valor_mu)
+                
+                # Una restricción está activa si g(x) ≈ 0 o μ > 0
+                if abs(val_rest_num) < 1e-6 or val_mu_num > 1e-6:
+                    restricciones_activas.append(i)
+                    print(f"  Restricción {i+1}: g_{i+1}(x) = {val_rest_num:.6f}, μ_{i+1} = {val_mu_num:.6f} (ACTIVA)")
+                else:
+                    print(f"  Restricción {i+1}: g_{i+1}(x) = {val_rest_num:.6f}, μ_{i+1} = {val_mu_num:.6f} (inactiva)")
+            
+            except (ValueError, TypeError):
+                print(f"  Restricción {i+1}: No se pudo evaluar numéricamente")
+        
+        return restricciones_activas
+    
+    def clasificar_punto_kkt(self, punto):
+        """
+        Clasifica un punto KKT usando el criterio de la segunda derivada
+        
+        Args:
+            punto: Diccionario con los valores del punto KKT
+        
+        Returns:
+            String con la clasificación del punto
+        """
+        if self.hessiana_orlada_kkt is None:
+            print("Error: Primero debe calcular la matriz Hessiana orlada KKT")
+            return "No clasificado"
+        
+        # Extraer solo las variables originales del punto
+        vars_originales = {var: punto.get(var, var) for var in self.variables if var in punto}
+        
+        if not vars_originales:
+            return "No se pudieron extraer las variables originales"
+        
+        try:
+            # Identificar restricciones activas
+            restricciones_activas = self.identificar_restricciones_activas(punto)
+            
+            # Evaluar la Hessiana orlada en el punto crítico
+            hessiana_evaluada = self.hessiana_orlada_kkt.subs(vars_originales)
+            
+            n = len(self.variables)
+            m_eq = len(self.restricciones_igualdad)
+            m_activas = len(restricciones_activas)
+            
+            print(f"\nAnalizando punto KKT con {n} variables, {m_eq} restricciones de igualdad y {m_activas} restricciones activas...")
+            
+            # Para problemas KKT, el análisis depende de las restricciones activas
+            # Construir la matriz Hessiana orlada reducida considerando solo restricciones activas
+            
+            if m_eq == 0 and m_activas == 0:
+                # Sin restricciones activas: análisis estándar de la Hessiana
+                hessiana_reducida = hessiana_evaluada[:n, :n]
+                try:
+                    autovalores = hessiana_reducida.eigenvals()
+                    autovalores_numericos = [complex(val).real for val in autovalores.keys()]
+                    
+                    todos_positivos = all(val > 1e-10 for val in autovalores_numericos)
+                    todos_negativos = all(val < -1e-10 for val in autovalores_numericos)
+                    
+                    if todos_positivos:
+                        return f"Mínimo local (sin restricciones activas, autovalores > 0: {autovalores_numericos})"
+                    elif todos_negativos:
+                        return f"Máximo local (sin restricciones activas, autovalores < 0: {autovalores_numericos})"
+                    else:
+                        return f"Punto de silla (sin restricciones activas, autovalores mixtos: {autovalores_numericos})"
+                
+                except Exception as e:
+                    return f"Error al analizar sin restricciones activas: {e}"
+            
+            else:
+                # Con restricciones activas: análisis de la matriz orlada
+                total_restricciones_activas = m_eq + m_activas
+                
+                # Calcular determinantes de submatrices relevantes
+                determinantes = []
+                
+                for k in range(total_restricciones_activas + 1, n + total_restricciones_activas + 1):
+                    if k <= hessiana_evaluada.rows:
+                        submatriz = hessiana_evaluada[:k, :k]
+                        try:
+                            det = float(submatriz.det())
+                            determinantes.append(det)
+                            print(f"  Determinante de submatriz {k}x{k}: {det:.6f}")
+                        except Exception as e:
+                            print(f"  Error calculando determinante {k}x{k}: {e}")
+                            determinantes.append(None)
+                
+                # Filtrar determinantes válidos
+                dets_validos = [d for d in determinantes if d is not None]
+                
+                if not dets_validos:
+                    return "No se pudieron evaluar los determinantes"
+                
+                # Análisis de los determinantes para clasificación KKT
+                if len(dets_validos) == 1:
+                    det = dets_validos[0]
+                    signo_esperado = (-1) ** total_restricciones_activas
+                    if det * signo_esperado > 0:
+                        return f"Mínimo local condicionado KKT (det={det:.6f}, {m_activas} restricciones activas)"
+                    elif det * signo_esperado < 0:
+                        return f"Máximo local condicionado KKT (det={det:.6f}, {m_activas} restricciones activas)"
+                    else:
+                        return f"Criterio no concluyente KKT (det={det:.6f})"
+                
+                else:
+                    # Análisis más complejo para múltiples determinantes
+                    signos = [1 if d > 0 else -1 if d < 0 else 0 for d in dets_validos]
+                    
+                    # Verificar patrón para mínimo/máximo
+                    patron_minimo = True
+                    patron_maximo = True
+                    
+                    for i, signo in enumerate(signos):
+                        signo_esperado_min = (-1) ** (total_restricciones_activas + i + 1)
+                        signo_esperado_max = (-1) ** total_restricciones_activas
+                        
+                        if signo != signo_esperado_min:
+                            patron_minimo = False
+                        if signo != signo_esperado_max:
+                            patron_maximo = False
+                    
+                    if patron_minimo:
+                        return f"Mínimo local condicionado KKT ({m_activas} restricciones activas, dets={dets_validos})"
+                    elif patron_maximo:
+                        return f"Máximo local condicionado KKT ({m_activas} restricciones activas, dets={dets_validos})"
+                    else:
+                        return f"Punto de silla o indeterminado KKT ({m_activas} restricciones activas, dets={dets_validos})"
+        
+        except Exception as e:
+            return f"Error en la clasificación KKT: {e}"
+    
+    def analizar_puntos_kkt(self):
+        """
+        Analiza y clasifica todos los puntos KKT encontrados
+        """
+        if not self.puntos_kkt:
+            print("Error: Primero debe encontrar los puntos KKT")
+            return
+        
+        if self.hessiana_orlada_kkt is None:
+            self.calcular_hessiana_orlada_kkt()
+        
+        self.clasificacion_puntos = []
+        
+        print("\nClasificando puntos KKT usando el criterio de la segunda derivada...")
+        
+        for i, punto in enumerate(self.puntos_kkt):
+            if isinstance(punto, dict):
+                clasificacion = self.clasificar_punto_kkt(punto)
+                self.clasificacion_puntos.append(clasificacion)
+                print(f"\nPunto KKT {i+1}: {clasificacion}")
+            else:
+                self.clasificacion_puntos.append("Formato de punto no soportado")
+                print(f"\nPunto KKT {i+1}: Formato no soportado para clasificación")
             
             # Verificar holgura complementaria: μⱼ * gⱼ(x) = 0
             for mu, restriccion in zip(self.multiplicadores_mu, self.restricciones_desigualdad):
@@ -333,12 +915,592 @@ class OptimizadorKKT:
                     producto = valor_mu * valor_restriccion
                     if abs(producto) > 1e-10:  # Tolerancia numérica
                         return False
+    
+    def calcular_hessiana_lagrangiana_kkt(self):
+        """
+        Calcula la matriz Hessiana de la Lagrangiana KKT con respecto a las variables originales
+        
+        Returns:
+            Matriz Hessiana de la Lagrangiana KKT
+        """
+        if self.lagrangiana_kkt is None:
+            print("Error: Primero debe construir la Lagrangiana KKT")
+            return None
+        
+        n = len(self.variables)
+        self.hessiana_lagrangiana = sp.zeros(n, n)
+        
+        print("\nCalculando matriz Hessiana de la Lagrangiana KKT...")
+        print("H_L = [")
+        
+        for i in range(n):
+            for j in range(n):
+                # Calcular la segunda derivada parcial ∂²L/∂xi∂xj
+                segunda_derivada = diff(self.lagrangiana_kkt, self.variables[i], self.variables[j])
+                self.hessiana_lagrangiana[i, j] = segunda_derivada
+        
+        # Mostrar la matriz Hessiana
+        for i in range(n):
+            fila = "  ["
+            for j in range(n):
+                if j > 0:
+                    fila += ", "
+                fila += f"∂²L/∂{self.variables[i]}∂{self.variables[j]} = {self.hessiana_lagrangiana[i, j]}"
+            fila += "]"
+            print(fila)
+        
+        print("]")
+        
+        return self.hessiana_lagrangiana
+    
+    def calcular_hessiana_orlada_kkt(self):
+        """
+        Calcula la matriz Hessiana orlada para problemas KKT
+        (incluye restricciones de igualdad y desigualdad activas)
+        
+        Returns:
+            Matriz Hessiana orlada KKT
+        """
+        if self.hessiana_lagrangiana is None:
+            self.calcular_hessiana_lagrangiana_kkt()
+        
+        n = len(self.variables)  # número de variables
+        m_eq = len(self.restricciones_igualdad)  # número de restricciones de igualdad
+        m_ineq = len(self.restricciones_desigualdad)  # número de restricciones de desigualdad
+        
+        # Para KKT, consideramos todas las restricciones (activas e inactivas se determinan por μ)
+        total_restricciones = m_eq + m_ineq
+        
+        # La matriz orlada tiene dimensión (n + total_restricciones) x (n + total_restricciones)
+        self.hessiana_orlada_kkt = sp.zeros(n + total_restricciones, n + total_restricciones)
+        
+        print("\nCalculando matriz Hessiana orlada KKT...")
+        
+        # Bloque superior izquierdo: Hessiana de la Lagrangiana
+        for i in range(n):
+            for j in range(n):
+                self.hessiana_orlada_kkt[i, j] = self.hessiana_lagrangiana[i, j]
+        
+        # Procesar restricciones de igualdad
+        for k, restriccion in enumerate(self.restricciones_igualdad):
+            # Bloque superior derecho: gradientes de restricciones de igualdad
+            for i in range(n):
+                grad_restriccion = diff(restriccion, self.variables[i])
+                self.hessiana_orlada_kkt[i, n + k] = grad_restriccion
+            
+            # Bloque inferior izquierdo: gradientes de restricciones de igualdad (transpuesto)
+            for j in range(n):
+                grad_restriccion = diff(restriccion, self.variables[j])
+                self.hessiana_orlada_kkt[n + k, j] = grad_restriccion
+        
+        # Procesar restricciones de desigualdad
+        for k, restriccion in enumerate(self.restricciones_desigualdad):
+            idx = n + m_eq + k
+            # Bloque superior derecho: gradientes de restricciones de desigualdad
+            for i in range(n):
+                grad_restriccion = diff(restriccion, self.variables[i])
+                self.hessiana_orlada_kkt[i, idx] = grad_restriccion
+            
+            # Bloque inferior izquierdo: gradientes de restricciones de desigualdad (transpuesto)
+            for j in range(n):
+                grad_restriccion = diff(restriccion, self.variables[j])
+                self.hessiana_orlada_kkt[idx, j] = grad_restriccion
+        
+        # Bloque inferior derecho: ceros
+        for i in range(total_restricciones):
+            for j in range(total_restricciones):
+                self.hessiana_orlada_kkt[n + i, n + j] = 0
+        
+        print(f"Matriz Hessiana orlada KKT de dimensión {n + total_restricciones}x{n + total_restricciones}:")
+        print("H_orlada_KKT = [")
+        for i in range(min(n + total_restricciones, 6)):  # Mostrar solo las primeras 6 filas para evitar salida muy larga
+            fila = "  ["
+            for j in range(min(n + total_restricciones, 6)):
+                if j > 0:
+                    fila += ", "
+                fila += f"{self.hessiana_orlada_kkt[i, j]}"
+            if n + total_restricciones > 6:
+                fila += ", ..."
+            fila += "]"
+            print(fila)
+        if n + total_restricciones > 6:
+            print("  ...")
+        print("]")
+        
+        return self.hessiana_orlada_kkt
+    
+    def identificar_restricciones_activas(self, punto):
+        """
+        Identifica qué restricciones de desigualdad están activas en un punto KKT
+        
+        Args:
+            punto: Diccionario con los valores del punto KKT
+        
+        Returns:
+            Lista de índices de restricciones activas
+        """
+        vars_originales = {var: punto.get(var, var) for var in self.variables if var in punto}
+        restricciones_activas = []
+        
+        print("\nIdentificando restricciones activas:")
+        
+        # Verificar restricciones de desigualdad
+        for i, restriccion in enumerate(self.restricciones_desigualdad):
+            valor_restriccion = restriccion.subs(vars_originales)
+            mu_correspondiente = self.multiplicadores_mu[i] if i < len(self.multiplicadores_mu) else None
+            valor_mu = punto.get(mu_correspondiente, 0) if mu_correspondiente else 0
+            
+            try:
+                val_rest_num = float(valor_restriccion)
+                val_mu_num = float(valor_mu)
+                
+                # Una restricción está activa si g(x) ≈ 0 o μ > 0
+                if abs(val_rest_num) < 1e-6 or val_mu_num > 1e-6:
+                    restricciones_activas.append(i)
+                    print(f"  Restricción {i+1}: g_{i+1}(x) = {val_rest_num:.6f}, μ_{i+1} = {val_mu_num:.6f} (ACTIVA)")
+                else:
+                    print(f"  Restricción {i+1}: g_{i+1}(x) = {val_rest_num:.6f}, μ_{i+1} = {val_mu_num:.6f} (inactiva)")
+            
+            except (ValueError, TypeError):
+                print(f"  Restricción {i+1}: No se pudo evaluar numéricamente")
+        
+        return restricciones_activas
+    
+    def clasificar_punto_kkt(self, punto):
+        """
+        Clasifica un punto KKT usando el criterio de la segunda derivada
+        
+        Args:
+            punto: Diccionario con los valores del punto KKT
+        
+        Returns:
+            String con la clasificación del punto
+        """
+        if self.hessiana_orlada_kkt is None:
+            print("Error: Primero debe calcular la matriz Hessiana orlada KKT")
+            return "No clasificado"
+        
+        # Extraer solo las variables originales del punto
+        vars_originales = {var: punto.get(var, var) for var in self.variables if var in punto}
+        
+        if not vars_originales:
+            return "No se pudieron extraer las variables originales"
+        
+        try:
+            # Identificar restricciones activas
+            restricciones_activas = self.identificar_restricciones_activas(punto)
+            
+            # Evaluar la Hessiana orlada en el punto crítico
+            hessiana_evaluada = self.hessiana_orlada_kkt.subs(vars_originales)
+            
+            n = len(self.variables)
+            m_eq = len(self.restricciones_igualdad)
+            m_activas = len(restricciones_activas)
+            
+            print(f"\nAnalizando punto KKT con {n} variables, {m_eq} restricciones de igualdad y {m_activas} restricciones activas...")
+            
+            # Para problemas KKT, el análisis depende de las restricciones activas
+            # Construir la matriz Hessiana orlada reducida considerando solo restricciones activas
+            
+            if m_eq == 0 and m_activas == 0:
+                # Sin restricciones activas: análisis estándar de la Hessiana
+                hessiana_reducida = hessiana_evaluada[:n, :n]
+                try:
+                    autovalores = hessiana_reducida.eigenvals()
+                    autovalores_numericos = [complex(val).real for val in autovalores.keys()]
+                    
+                    todos_positivos = all(val > 1e-10 for val in autovalores_numericos)
+                    todos_negativos = all(val < -1e-10 for val in autovalores_numericos)
+                    
+                    if todos_positivos:
+                        return f"Mínimo local (sin restricciones activas, autovalores > 0: {autovalores_numericos})"
+                    elif todos_negativos:
+                        return f"Máximo local (sin restricciones activas, autovalores < 0: {autovalores_numericos})"
+                    else:
+                        return f"Punto de silla (sin restricciones activas, autovalores mixtos: {autovalores_numericos})"
+                
+                except Exception as e:
+                    return f"Error al analizar sin restricciones activas: {e}"
+            
+            else:
+                # Con restricciones activas: análisis de la matriz orlada
+                total_restricciones_activas = m_eq + m_activas
+                
+                # Calcular determinantes de submatrices relevantes
+                determinantes = []
+                
+                for k in range(total_restricciones_activas + 1, n + total_restricciones_activas + 1):
+                    if k <= hessiana_evaluada.rows:
+                        submatriz = hessiana_evaluada[:k, :k]
+                        try:
+                            det = float(submatriz.det())
+                            determinantes.append(det)
+                            print(f"  Determinante de submatriz {k}x{k}: {det:.6f}")
+                        except Exception as e:
+                            print(f"  Error calculando determinante {k}x{k}: {e}")
+                            determinantes.append(None)
+                
+                # Filtrar determinantes válidos
+                dets_validos = [d for d in determinantes if d is not None]
+                
+                if not dets_validos:
+                    return "No se pudieron evaluar los determinantes"
+                
+                # Análisis de los determinantes para clasificación KKT
+                if len(dets_validos) == 1:
+                    det = dets_validos[0]
+                    signo_esperado = (-1) ** total_restricciones_activas
+                    if det * signo_esperado > 0:
+                        return f"Mínimo local condicionado KKT (det={det:.6f}, {m_activas} restricciones activas)"
+                    elif det * signo_esperado < 0:
+                        return f"Máximo local condicionado KKT (det={det:.6f}, {m_activas} restricciones activas)"
+                    else:
+                        return f"Criterio no concluyente KKT (det={det:.6f})"
+                
+                else:
+                    # Análisis más complejo para múltiples determinantes
+                    signos = [1 if d > 0 else -1 if d < 0 else 0 for d in dets_validos]
+                    
+                    # Verificar patrón para mínimo/máximo
+                    patron_minimo = True
+                    patron_maximo = True
+                    
+                    for i, signo in enumerate(signos):
+                        signo_esperado_min = (-1) ** (total_restricciones_activas + i + 1)
+                        signo_esperado_max = (-1) ** total_restricciones_activas
+                        
+                        if signo != signo_esperado_min:
+                            patron_minimo = False
+                        if signo != signo_esperado_max:
+                            patron_maximo = False
+                    
+                    if patron_minimo:
+                        return f"Mínimo local condicionado KKT ({m_activas} restricciones activas, dets={dets_validos})"
+                    elif patron_maximo:
+                        return f"Máximo local condicionado KKT ({m_activas} restricciones activas, dets={dets_validos})"
+                    else:
+                        return f"Punto de silla o indeterminado KKT ({m_activas} restricciones activas, dets={dets_validos})"
+        
+        except Exception as e:
+            return f"Error en la clasificación KKT: {e}"
+    
+    def analizar_puntos_kkt(self):
+        """
+        Analiza y clasifica todos los puntos KKT encontrados
+        """
+        if not self.puntos_kkt:
+            print("Error: Primero debe encontrar los puntos KKT")
+            return
+        
+        if self.hessiana_orlada_kkt is None:
+            self.calcular_hessiana_orlada_kkt()
+        
+        self.clasificacion_puntos = []
+        
+        print("\nClasificando puntos KKT usando el criterio de la segunda derivada...")
+        
+        for i, punto in enumerate(self.puntos_kkt):
+            if isinstance(punto, dict):
+                clasificacion = self.clasificar_punto_kkt(punto)
+                self.clasificacion_puntos.append(clasificacion)
+                print(f"\nPunto KKT {i+1}: {clasificacion}")
+            else:
+                self.clasificacion_puntos.append("Formato de punto no soportado")
+                print(f"\nPunto KKT {i+1}: Formato no soportado para clasificación")
             
             return True
+    
+    def calcular_hessiana_lagrangiana_kkt(self):
+        """
+        Calcula la matriz Hessiana de la Lagrangiana KKT con respecto a las variables originales
+        
+        Returns:
+            Matriz Hessiana de la Lagrangiana KKT
+        """
+        if self.lagrangiana_kkt is None:
+            print("Error: Primero debe construir la Lagrangiana KKT")
+            return None
+        
+        n = len(self.variables)
+        self.hessiana_lagrangiana = sp.zeros(n, n)
+        
+        print("\nCalculando matriz Hessiana de la Lagrangiana KKT...")
+        print("H_L = [")
+        
+        for i in range(n):
+            for j in range(n):
+                # Calcular la segunda derivada parcial ∂²L/∂xi∂xj
+                segunda_derivada = diff(self.lagrangiana_kkt, self.variables[i], self.variables[j])
+                self.hessiana_lagrangiana[i, j] = segunda_derivada
+        
+        # Mostrar la matriz Hessiana
+        for i in range(n):
+            fila = "  ["
+            for j in range(n):
+                if j > 0:
+                    fila += ", "
+                fila += f"∂²L/∂{self.variables[i]}∂{self.variables[j]} = {self.hessiana_lagrangiana[i, j]}"
+            fila += "]"
+            print(fila)
+        
+        print("]")
+        
+        return self.hessiana_lagrangiana
+    
+    def calcular_hessiana_orlada_kkt(self):
+        """
+        Calcula la matriz Hessiana orlada para problemas KKT
+        (incluye restricciones de igualdad y desigualdad activas)
+        
+        Returns:
+            Matriz Hessiana orlada KKT
+        """
+        if self.hessiana_lagrangiana is None:
+            self.calcular_hessiana_lagrangiana_kkt()
+        
+        n = len(self.variables)  # número de variables
+        m_eq = len(self.restricciones_igualdad)  # número de restricciones de igualdad
+        m_ineq = len(self.restricciones_desigualdad)  # número de restricciones de desigualdad
+        
+        # Para KKT, consideramos todas las restricciones (activas e inactivas se determinan por μ)
+        total_restricciones = m_eq + m_ineq
+        
+        # La matriz orlada tiene dimensión (n + total_restricciones) x (n + total_restricciones)
+        self.hessiana_orlada_kkt = sp.zeros(n + total_restricciones, n + total_restricciones)
+        
+        print("\nCalculando matriz Hessiana orlada KKT...")
+        
+        # Bloque superior izquierdo: Hessiana de la Lagrangiana
+        for i in range(n):
+            for j in range(n):
+                self.hessiana_orlada_kkt[i, j] = self.hessiana_lagrangiana[i, j]
+        
+        # Procesar restricciones de igualdad
+        for k, restriccion in enumerate(self.restricciones_igualdad):
+            # Bloque superior derecho: gradientes de restricciones de igualdad
+            for i in range(n):
+                grad_restriccion = diff(restriccion, self.variables[i])
+                self.hessiana_orlada_kkt[i, n + k] = grad_restriccion
             
+            # Bloque inferior izquierdo: gradientes de restricciones de igualdad (transpuesto)
+            for j in range(n):
+                grad_restriccion = diff(restriccion, self.variables[j])
+                self.hessiana_orlada_kkt[n + k, j] = grad_restriccion
+        
+        # Procesar restricciones de desigualdad
+        for k, restriccion in enumerate(self.restricciones_desigualdad):
+            idx = n + m_eq + k
+            # Bloque superior derecho: gradientes de restricciones de desigualdad
+            for i in range(n):
+                grad_restriccion = diff(restriccion, self.variables[i])
+                self.hessiana_orlada_kkt[i, idx] = grad_restriccion
+            
+            # Bloque inferior izquierdo: gradientes de restricciones de desigualdad (transpuesto)
+            for j in range(n):
+                grad_restriccion = diff(restriccion, self.variables[j])
+                self.hessiana_orlada_kkt[idx, j] = grad_restriccion
+        
+        # Bloque inferior derecho: ceros
+        for i in range(total_restricciones):
+            for j in range(total_restricciones):
+                self.hessiana_orlada_kkt[n + i, n + j] = 0
+        
+        print(f"Matriz Hessiana orlada KKT de dimensión {n + total_restricciones}x{n + total_restricciones}:")
+        print("H_orlada_KKT = [")
+        for i in range(min(n + total_restricciones, 6)):  # Mostrar solo las primeras 6 filas para evitar salida muy larga
+            fila = "  ["
+            for j in range(min(n + total_restricciones, 6)):
+                if j > 0:
+                    fila += ", "
+                fila += f"{self.hessiana_orlada_kkt[i, j]}"
+            if n + total_restricciones > 6:
+                fila += ", ..."
+            fila += "]"
+            print(fila)
+        if n + total_restricciones > 6:
+            print("  ...")
+        print("]")
+        
+        return self.hessiana_orlada_kkt
+    
+    def identificar_restricciones_activas(self, punto):
+        """
+        Identifica qué restricciones de desigualdad están activas en un punto KKT
+        
+        Args:
+            punto: Diccionario con los valores del punto KKT
+        
+        Returns:
+            Lista de índices de restricciones activas
+        """
+        vars_originales = {var: punto.get(var, var) for var in self.variables if var in punto}
+        restricciones_activas = []
+        
+        print("\nIdentificando restricciones activas:")
+        
+        # Verificar restricciones de desigualdad
+        for i, restriccion in enumerate(self.restricciones_desigualdad):
+            valor_restriccion = restriccion.subs(vars_originales)
+            mu_correspondiente = self.multiplicadores_mu[i] if i < len(self.multiplicadores_mu) else None
+            valor_mu = punto.get(mu_correspondiente, 0) if mu_correspondiente else 0
+            
+            try:
+                val_rest_num = float(valor_restriccion)
+                val_mu_num = float(valor_mu)
+                
+                # Una restricción está activa si g(x) ≈ 0 o μ > 0
+                if abs(val_rest_num) < 1e-6 or val_mu_num > 1e-6:
+                    restricciones_activas.append(i)
+                    print(f"  Restricción {i+1}: g_{i+1}(x) = {val_rest_num:.6f}, μ_{i+1} = {val_mu_num:.6f} (ACTIVA)")
+                else:
+                    print(f"  Restricción {i+1}: g_{i+1}(x) = {val_rest_num:.6f}, μ_{i+1} = {val_mu_num:.6f} (inactiva)")
+            
+            except (ValueError, TypeError):
+                print(f"  Restricción {i+1}: No se pudo evaluar numéricamente")
+        
+        return restricciones_activas
+    
+    def clasificar_punto_kkt(self, punto):
+        """
+        Clasifica un punto KKT usando el criterio de la segunda derivada
+        
+        Args:
+            punto: Diccionario con los valores del punto KKT
+        
+        Returns:
+            String con la clasificación del punto
+        """
+        if self.hessiana_orlada_kkt is None:
+            print("Error: Primero debe calcular la matriz Hessiana orlada KKT")
+            return "No clasificado"
+        
+        # Extraer solo las variables originales del punto
+        vars_originales = {var: punto.get(var, var) for var in self.variables if var in punto}
+        
+        if not vars_originales:
+            return "No se pudieron extraer las variables originales"
+        
+        try:
+            # Identificar restricciones activas
+            restricciones_activas = self.identificar_restricciones_activas(punto)
+            
+            # Evaluar la Hessiana orlada en el punto crítico
+            hessiana_evaluada = self.hessiana_orlada_kkt.subs(vars_originales)
+            
+            n = len(self.variables)
+            m_eq = len(self.restricciones_igualdad)
+            m_activas = len(restricciones_activas)
+            
+            print(f"\nAnalizando punto KKT con {n} variables, {m_eq} restricciones de igualdad y {m_activas} restricciones activas...")
+            
+            # Para problemas KKT, el análisis depende de las restricciones activas
+            # Construir la matriz Hessiana orlada reducida considerando solo restricciones activas
+            
+            if m_eq == 0 and m_activas == 0:
+                # Sin restricciones activas: análisis estándar de la Hessiana
+                hessiana_reducida = hessiana_evaluada[:n, :n]
+                try:
+                    autovalores = hessiana_reducida.eigenvals()
+                    autovalores_numericos = [complex(val).real for val in autovalores.keys()]
+                    
+                    todos_positivos = all(val > 1e-10 for val in autovalores_numericos)
+                    todos_negativos = all(val < -1e-10 for val in autovalores_numericos)
+                    
+                    if todos_positivos:
+                        return f"Mínimo local (sin restricciones activas, autovalores > 0: {autovalores_numericos})"
+                    elif todos_negativos:
+                        return f"Máximo local (sin restricciones activas, autovalores < 0: {autovalores_numericos})"
+                    else:
+                        return f"Punto de silla (sin restricciones activas, autovalores mixtos: {autovalores_numericos})"
+                
+                except Exception as e:
+                    return f"Error al analizar sin restricciones activas: {e}"
+            
+            else:
+                # Con restricciones activas: análisis de la matriz orlada
+                total_restricciones_activas = m_eq + m_activas
+                
+                # Calcular determinantes de submatrices relevantes
+                determinantes = []
+                
+                for k in range(total_restricciones_activas + 1, n + total_restricciones_activas + 1):
+                    if k <= hessiana_evaluada.rows:
+                        submatriz = hessiana_evaluada[:k, :k]
+                        try:
+                            det = float(submatriz.det())
+                            determinantes.append(det)
+                            print(f"  Determinante de submatriz {k}x{k}: {det:.6f}")
+                        except Exception as e:
+                            print(f"  Error calculando determinante {k}x{k}: {e}")
+                            determinantes.append(None)
+                
+                # Filtrar determinantes válidos
+                dets_validos = [d for d in determinantes if d is not None]
+                
+                if not dets_validos:
+                    return "No se pudieron evaluar los determinantes"
+                
+                # Análisis de los determinantes para clasificación KKT
+                if len(dets_validos) == 1:
+                    det = dets_validos[0]
+                    signo_esperado = (-1) ** total_restricciones_activas
+                    if det * signo_esperado > 0:
+                        return f"Mínimo local condicionado KKT (det={det:.6f}, {m_activas} restricciones activas)"
+                    elif det * signo_esperado < 0:
+                        return f"Máximo local condicionado KKT (det={det:.6f}, {m_activas} restricciones activas)"
+                    else:
+                        return f"Criterio no concluyente KKT (det={det:.6f})"
+                
+                else:
+                    # Análisis más complejo para múltiples determinantes
+                    signos = [1 if d > 0 else -1 if d < 0 else 0 for d in dets_validos]
+                    
+                    # Verificar patrón para mínimo/máximo
+                    patron_minimo = True
+                    patron_maximo = True
+                    
+                    for i, signo in enumerate(signos):
+                        signo_esperado_min = (-1) ** (total_restricciones_activas + i + 1)
+                        signo_esperado_max = (-1) ** total_restricciones_activas
+                        
+                        if signo != signo_esperado_min:
+                            patron_minimo = False
+                        if signo != signo_esperado_max:
+                            patron_maximo = False
+                    
+                    if patron_minimo:
+                        return f"Mínimo local condicionado KKT ({m_activas} restricciones activas, dets={dets_validos})"
+                    elif patron_maximo:
+                        return f"Máximo local condicionado KKT ({m_activas} restricciones activas, dets={dets_validos})"
+                    else:
+                        return f"Punto de silla o indeterminado KKT ({m_activas} restricciones activas, dets={dets_validos})"
+        
         except Exception as e:
-            print(f"Error al verificar condiciones KKT: {e}")
-            return False
+            return f"Error en la clasificación KKT: {e}"
+    
+    def analizar_puntos_kkt(self):
+        """
+        Analiza y clasifica todos los puntos KKT encontrados
+        """
+        if not self.puntos_kkt:
+            print("Error: Primero debe encontrar los puntos KKT")
+            return
+        
+        if self.hessiana_orlada_kkt is None:
+            self.calcular_hessiana_orlada_kkt()
+        
+        self.clasificacion_puntos = []
+        
+        print("\nClasificando puntos KKT usando el criterio de la segunda derivada...")
+        
+        for i, punto in enumerate(self.puntos_kkt):
+            if isinstance(punto, dict):
+                clasificacion = self.clasificar_punto_kkt(punto)
+                self.clasificacion_puntos.append(clasificacion)
+                print(f"\nPunto KKT {i+1}: {clasificacion}")
+            else:
+                self.clasificacion_puntos.append("Formato de punto no soportado")
+                print(f"\nPunto KKT {i+1}: Formato no soportado para clasificación")
     
     def mostrar_puntos_kkt(self):
         """
@@ -403,6 +1565,12 @@ class OptimizadorKKT:
                         valor_restriccion = restriccion.subs(vars_originales)
                         producto = valor_mu * valor_restriccion
                         print(f"    μ_{j+1} * g_{j+1} = {valor_mu} * {valor_restriccion} = {producto} (debe ser = 0)")
+                
+                # Mostrar clasificación si está disponible
+                if i-1 < len(self.clasificacion_puntos):
+                    print(f"  Clasificación: {self.clasificacion_puntos[i-1]}")
+                else:
+                    print("  Clasificación: No calculada")
     
     def analisis_completo_kkt(self, nombres_variables: List[str], 
                              expresion_funcion: str,
@@ -467,7 +1635,14 @@ class OptimizadorKKT:
             print("Las condiciones KKT son necesarias pero no suficientes para optimalidad.")
             return
         
-        # Paso 10: Mostrar resultados
+        # Paso 10: Calcular matriz Hessiana orlada KKT
+        if self.calcular_hessiana_orlada_kkt() is None:
+            print("Advertencia: No se pudo calcular la matriz Hessiana orlada KKT")
+        
+        # Paso 11: Analizar y clasificar puntos KKT
+        self.analizar_puntos_kkt()
+        
+        # Paso 12: Mostrar resultados
         self.mostrar_puntos_kkt()
 
 def mostrar_ejemplos_kkt(optimizador):

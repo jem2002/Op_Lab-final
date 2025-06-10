@@ -1,11 +1,3 @@
-#!/usr/bin/env python3
-"""
-Optimizador Sin Restricciones - Cálculo Diferencial
-
-Este módulo implementa la resolución de problemas de optimización no lineal
-sin restricciones usando cálculo diferencial.
-"""
-
 import sympy as sp
 from sympy import symbols, diff, solve, pprint, latex
 import numpy as np
@@ -20,7 +12,9 @@ class OptimizadorNoLineal:
         self.variables = []
         self.funcion_objetivo = None
         self.gradiente = []
+        self.hessiana = None
         self.puntos_criticos = []
+        self.clasificacion_puntos = []
     
     def definir_variables(self, nombres_variables: List[str]):
         """
@@ -115,17 +109,153 @@ class OptimizadorNoLineal:
             print(f"Error al resolver el sistema: {e}")
             return None
     
+    def calcular_hessiana(self):
+        """
+        Calcula la matriz Hessiana (matriz de segundas derivadas parciales)
+        
+        Returns:
+            Matriz Hessiana como matriz de SymPy
+        """
+        if self.funcion_objetivo is None:
+            print("Error: Primero debe definir una función objetivo")
+            return None
+        
+        n = len(self.variables)
+        self.hessiana = sp.zeros(n, n)
+        
+        print("\nCalculando matriz Hessiana...")
+        print("H = [")
+        
+        for i in range(n):
+            for j in range(n):
+                # Calcular la segunda derivada parcial ∂²f/∂xi∂xj
+                segunda_derivada = diff(self.funcion_objetivo, self.variables[i], self.variables[j])
+                self.hessiana[i, j] = segunda_derivada
+                
+        # Mostrar la matriz Hessiana
+        for i in range(n):
+            fila = "  ["
+            for j in range(n):
+                if j > 0:
+                    fila += ", "
+                fila += f"∂²f/∂{self.variables[i]}∂{self.variables[j]} = {self.hessiana[i, j]}"
+            fila += "]"
+            print(fila)
+        
+        print("]")
+        
+        return self.hessiana
+    
+    def clasificar_punto_critico(self, punto):
+        """
+        Clasifica un punto crítico usando el criterio de la segunda derivada
+        
+        Args:
+            punto: Diccionario o lista con los valores del punto crítico
+        
+        Returns:
+            String con la clasificación del punto
+        """
+        if self.hessiana is None:
+            print("Error: Primero debe calcular la matriz Hessiana")
+            return "No clasificado"
+        
+        # Convertir punto a diccionario si es necesario
+        if isinstance(punto, (list, tuple)):
+            punto_dict = dict(zip(self.variables, punto))
+        else:
+            punto_dict = punto
+        
+        # Evaluar la Hessiana en el punto crítico
+        hessiana_evaluada = self.hessiana.subs(punto_dict)
+        
+        n = len(self.variables)
+        
+        if n == 1:
+            # Caso unidimensional: solo verificar el signo de la segunda derivada
+            segunda_derivada = float(hessiana_evaluada[0, 0])
+            if segunda_derivada > 0:
+                return "Mínimo local"
+            elif segunda_derivada < 0:
+                return "Máximo local"
+            else:
+                return "Criterio no concluyente (segunda derivada = 0)"
+        
+        elif n == 2:
+            # Caso bidimensional: usar determinante y traza
+            try:
+                # Convertir a float para evaluación numérica
+                h11 = float(hessiana_evaluada[0, 0])
+                h12 = float(hessiana_evaluada[0, 1])
+                h21 = float(hessiana_evaluada[1, 0])
+                h22 = float(hessiana_evaluada[1, 1])
+                
+                determinante = h11 * h22 - h12 * h21
+                traza = h11 + h22
+                
+                if determinante > 0:
+                    if traza > 0:
+                        return f"Mínimo local (det={determinante:.4f} > 0, tr={traza:.4f} > 0)"
+                    else:
+                        return f"Máximo local (det={determinante:.4f} > 0, tr={traza:.4f} < 0)"
+                elif determinante < 0:
+                    return f"Punto de silla (det={determinante:.4f} < 0)"
+                else:
+                    return f"Criterio no concluyente (det={determinante:.4f} = 0)"
+            
+            except (ValueError, TypeError):
+                return "No se pudo evaluar numéricamente"
+        
+        else:
+            # Caso multidimensional: verificar definitud usando autovalores
+            try:
+                autovalores = hessiana_evaluada.eigenvals()
+                autovalores_numericos = [complex(val).real for val in autovalores.keys()]
+                
+                todos_positivos = all(val > 1e-10 for val in autovalores_numericos)
+                todos_negativos = all(val < -1e-10 for val in autovalores_numericos)
+                
+                if todos_positivos:
+                    return f"Mínimo local (todos los autovalores > 0: {autovalores_numericos})"
+                elif todos_negativos:
+                    return f"Máximo local (todos los autovalores < 0: {autovalores_numericos})"
+                else:
+                    return f"Punto de silla (autovalores mixtos: {autovalores_numericos})"
+            
+            except Exception as e:
+                return f"Error al calcular autovalores: {e}"
+    
+    def analizar_puntos_criticos(self):
+        """
+        Analiza y clasifica todos los puntos críticos encontrados
+        """
+        if not self.puntos_criticos:
+            print("Error: Primero debe encontrar los puntos críticos")
+            return
+        
+        if self.hessiana is None:
+            self.calcular_hessiana()
+        
+        self.clasificacion_puntos = []
+        
+        print("\nClasificando puntos críticos usando el criterio de la segunda derivada...")
+        
+        for i, punto in enumerate(self.puntos_criticos):
+            clasificacion = self.clasificar_punto_critico(punto)
+            self.clasificacion_puntos.append(clasificacion)
+            print(f"\nPunto crítico {i+1}: {clasificacion}")
+    
     def mostrar_puntos_criticos(self):
         """
-        Muestra los puntos críticos encontrados de forma clara
+        Muestra los puntos críticos encontrados con su clasificación
         """
         if not self.puntos_criticos:
             print("\nNo se encontraron puntos críticos o no se han calculado aún.")
             return
         
-        print("\n" + "="*50)
-        print("PUNTOS CRÍTICOS ENCONTRADOS")
-        print("="*50)
+        print("\n" + "="*70)
+        print("PUNTOS CRÍTICOS ENCONTRADOS Y CLASIFICADOS")
+        print("="*70)
         
         for i, punto in enumerate(self.puntos_criticos, 1):
             print(f"\nPunto crítico {i}:")
@@ -146,6 +276,12 @@ class OptimizadorNoLineal:
                 punto_dict = dict(zip(self.variables, punto))
                 valor_funcion = self.funcion_objetivo.subs(punto_dict)
                 print(f"  f({', '.join(str(v) for v in punto)}) = {valor_funcion}")
+            
+            # Mostrar clasificación si está disponible
+            if i-1 < len(self.clasificacion_puntos):
+                print(f"  Clasificación: {self.clasificacion_puntos[i-1]}")
+            else:
+                print("  Clasificación: No calculada")
     
     def analisis_completo(self, nombres_variables: List[str], expresion_funcion: str):
         """
@@ -174,7 +310,14 @@ class OptimizadorNoLineal:
         if self.encontrar_puntos_criticos() is None:
             return
         
-        # Paso 5: Mostrar resultados
+        # Paso 5: Calcular matriz Hessiana
+        if self.calcular_hessiana() is None:
+            return
+        
+        # Paso 6: Analizar y clasificar puntos críticos
+        self.analizar_puntos_criticos()
+        
+        # Paso 7: Mostrar resultados
         self.mostrar_puntos_criticos()
 
 def mostrar_ejemplos_sin_restricciones(optimizador):

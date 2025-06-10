@@ -1,11 +1,3 @@
-#!/usr/bin/env python3
-"""
-Optimizador con Multiplicadores de Lagrange
-
-Este módulo implementa la resolución de problemas de optimización no lineal
-con restricciones de igualdad usando el método de los Multiplicadores de Lagrange.
-"""
-
 import sympy as sp
 from sympy import symbols, diff, solve, pprint, latex
 import numpy as np
@@ -24,7 +16,10 @@ class OptimizadorConRestricciones:
         self.multiplicadores = []
         self.lagrangiana = None
         self.gradiente_lagrangiana = []
+        self.hessiana_lagrangiana = None
+        self.hessiana_orlada = None
         self.puntos_optimos = []
+        self.clasificacion_puntos = []
     
     def definir_variables(self, nombres_variables: List[str]):
         """
@@ -197,22 +192,239 @@ class OptimizadorConRestricciones:
                 self.puntos_optimos = []
             
             return self.puntos_optimos
-            
+
         except Exception as e:
             print(f"Error al resolver el sistema: {e}")
             return None
     
+    def calcular_hessiana_lagrangiana(self):
+        """
+        Calcula la matriz Hessiana de la Lagrangiana con respecto a las variables originales
+        
+        Returns:
+            Matriz Hessiana de la Lagrangiana
+        """
+        if self.lagrangiana is None:
+            print("Error: Primero debe construir la Lagrangiana")
+            return None
+        
+        n = len(self.variables)
+        self.hessiana_lagrangiana = sp.zeros(n, n)
+        
+        print("\nCalculando matriz Hessiana de la Lagrangiana...")
+        print("H_L = [")
+        
+        for i in range(n):
+            for j in range(n):
+                # Calcular la segunda derivada parcial ∂²L/∂xi∂xj
+                segunda_derivada = diff(self.lagrangiana, self.variables[i], self.variables[j])
+                self.hessiana_lagrangiana[i, j] = segunda_derivada
+        
+        # Mostrar la matriz Hessiana
+        for i in range(n):
+            fila = "  ["
+            for j in range(n):
+                if j > 0:
+                    fila += ", "
+                fila += f"∂²L/∂{self.variables[i]}∂{self.variables[j]} = {self.hessiana_lagrangiana[i, j]}"
+            fila += "]"
+            print(fila)
+        
+        print("]")
+        
+        return self.hessiana_lagrangiana
+    
+    def calcular_hessiana_orlada(self):
+        """
+        Calcula la matriz Hessiana orlada (bordered Hessian) para el análisis de segunda derivada
+        con restricciones de igualdad
+        
+        Returns:
+            Matriz Hessiana orlada
+        """
+        if self.hessiana_lagrangiana is None:
+            self.calcular_hessiana_lagrangiana()
+        
+        n = len(self.variables)  # número de variables
+        m = len(self.restricciones)  # número de restricciones
+        
+        # La matriz orlada tiene dimensión (n+m) x (n+m)
+        self.hessiana_orlada = sp.zeros(n + m, n + m)
+        
+        print("\nCalculando matriz Hessiana orlada...")
+        
+        # Bloque superior izquierdo: Hessiana de la Lagrangiana
+        for i in range(n):
+            for j in range(n):
+                self.hessiana_orlada[i, j] = self.hessiana_lagrangiana[i, j]
+        
+        # Bloques de restricciones
+        for k, restriccion in enumerate(self.restricciones):
+            # Bloque superior derecho: gradientes de restricciones
+            for i in range(n):
+                grad_restriccion = diff(restriccion, self.variables[i])
+                self.hessiana_orlada[i, n + k] = grad_restriccion
+            
+            # Bloque inferior izquierdo: gradientes de restricciones (transpuesto)
+            for j in range(n):
+                grad_restriccion = diff(restriccion, self.variables[j])
+                self.hessiana_orlada[n + k, j] = grad_restriccion
+        
+        # Bloque inferior derecho: ceros (para restricciones de igualdad)
+        for i in range(m):
+            for j in range(m):
+                self.hessiana_orlada[n + i, n + j] = 0
+        
+        print(f"Matriz Hessiana orlada de dimensión {n+m}x{n+m}:")
+        print("H_orlada = [")
+        for i in range(n + m):
+            fila = "  ["
+            for j in range(n + m):
+                if j > 0:
+                    fila += ", "
+                fila += f"{self.hessiana_orlada[i, j]}"
+            fila += "]"
+            print(fila)
+        print("]")
+        
+        return self.hessiana_orlada
+    
+    def clasificar_punto_con_restricciones(self, punto):
+        """
+        Clasifica un punto crítico con restricciones usando el criterio de la segunda derivada
+        (análisis de la matriz Hessiana orlada)
+        
+        Args:
+            punto: Diccionario con los valores del punto crítico
+        
+        Returns:
+            String con la clasificación del punto
+        """
+        if self.hessiana_orlada is None:
+            print("Error: Primero debe calcular la matriz Hessiana orlada")
+            return "No clasificado"
+        
+        # Extraer solo las variables originales del punto
+        vars_originales = {var: punto.get(var, var) for var in self.variables if var in punto}
+        
+        if not vars_originales:
+            return "No se pudieron extraer las variables originales"
+        
+        try:
+            # Evaluar la Hessiana orlada en el punto crítico
+            hessiana_evaluada = self.hessiana_orlada.subs(vars_originales)
+            
+            n = len(self.variables)
+            m = len(self.restricciones)
+            
+            # Para problemas con restricciones de igualdad, analizamos los menores principales
+            # de la matriz Hessiana orlada
+            
+            print(f"\nAnalizando punto con {n} variables y {m} restricciones...")
+            
+            # Calcular determinantes de submatrices relevantes
+            determinantes = []
+            
+            # Para restricciones de igualdad, necesitamos verificar los últimos (n-m) menores
+            # principales de la matriz Hessiana orlada
+            
+            for k in range(m + 1, n + m + 1):
+                submatriz = hessiana_evaluada[:k, :k]
+                try:
+                    det = float(submatriz.det())
+                    determinantes.append(det)
+                    print(f"  Determinante de submatriz {k}x{k}: {det:.6f}")
+                except Exception as e:
+                    print(f"  Error calculando determinante {k}x{k}: {e}")
+                    determinantes.append(None)
+            
+            # Análisis de los determinantes para clasificación
+            if len(determinantes) == 0:
+                return "No se pudieron calcular determinantes"
+            
+            # Filtrar determinantes válidos
+            dets_validos = [d for d in determinantes if d is not None]
+            
+            if not dets_validos:
+                return "No se pudieron evaluar los determinantes"
+            
+            # Para restricciones de igualdad:
+            # - Si los últimos (n-m) determinantes alternan en signo empezando por (-1)^m, es mínimo
+            # - Si todos tienen el mismo signo que (-1)^m, es máximo
+            # - En otros casos, es punto de silla o indeterminado
+            
+            if len(dets_validos) == 1:
+                det = dets_validos[0]
+                signo_esperado = (-1) ** m
+                if det * signo_esperado > 0:
+                    return f"Mínimo local condicionado (det={det:.6f})"
+                elif det * signo_esperado < 0:
+                    return f"Máximo local condicionado (det={det:.6f})"
+                else:
+                    return f"Criterio no concluyente (det={det:.6f})"
+            
+            else:
+                # Análisis más complejo para múltiples determinantes
+                signos = [1 if d > 0 else -1 if d < 0 else 0 for d in dets_validos]
+                
+                # Verificar patrón alternante
+                patron_minimo = True
+                patron_maximo = True
+                
+                for i, signo in enumerate(signos):
+                    signo_esperado_min = (-1) ** (m + i + 1)
+                    signo_esperado_max = (-1) ** m
+                    
+                    if signo != signo_esperado_min:
+                        patron_minimo = False
+                    if signo != signo_esperado_max:
+                        patron_maximo = False
+                
+                if patron_minimo:
+                    return f"Mínimo local condicionado (dets={dets_validos})"
+                elif patron_maximo:
+                    return f"Máximo local condicionado (dets={dets_validos})"
+                else:
+                    return f"Punto de silla o indeterminado (dets={dets_validos})"
+        
+        except Exception as e:
+            return f"Error en la clasificación: {e}"
+    
+    def analizar_puntos_con_restricciones(self):
+        """
+        Analiza y clasifica todos los puntos óptimos encontrados con restricciones
+        """
+        if not self.puntos_optimos:
+            print("Error: Primero debe encontrar los puntos óptimos")
+            return
+        
+        if self.hessiana_orlada is None:
+            self.calcular_hessiana_orlada()
+        
+        self.clasificacion_puntos = []
+        
+        print("\nClasificando puntos óptimos usando el criterio de la segunda derivada con restricciones...")
+        
+        for i, punto in enumerate(self.puntos_optimos):
+            if isinstance(punto, dict):
+                clasificacion = self.clasificar_punto_con_restricciones(punto)
+                self.clasificacion_puntos.append(clasificacion)
+                print(f"\nPunto óptimo {i+1}: {clasificacion}")
+            else:
+                self.clasificacion_puntos.append("Formato de punto no soportado")
+                print(f"\nPunto óptimo {i+1}: Formato no soportado para clasificación")
+    
     def mostrar_puntos_optimos(self):
         """
-        Muestra los puntos óptimos y los valores de los multiplicadores
+        Muestra los puntos óptimos con sus clasificaciones y los valores de los multiplicadores
         """
         if not self.puntos_optimos:
             print("\nNo se encontraron puntos óptimos o no se han calculado aún.")
             return
         
-        print("\n" + "="*60)
-        print("PUNTOS ÓPTIMOS CON RESTRICCIONES (MULTIPLICADORES DE LAGRANGE)")
-        print("="*60)
+        print("\n" + "="*80)
+        print("PUNTOS ÓPTIMOS CON RESTRICCIONES Y CLASIFICACIÓN (MULTIPLICADORES DE LAGRANGE)")
+        print("="*80)
         
         for i, solucion in enumerate(self.puntos_optimos, 1):
             print(f"\nSolución {i}:")
@@ -248,6 +460,12 @@ class OptimizadorConRestricciones:
                 for j, restriccion in enumerate(self.restricciones):
                     valor_restriccion = restriccion.subs(vars_originales)
                     print(f"    g_{j+1} = {valor_restriccion} (debe ser ≈ 0)")
+                
+                # Mostrar clasificación si está disponible
+                if i-1 < len(self.clasificacion_puntos):
+                    print(f"  Clasificación: {self.clasificacion_puntos[i-1]}")
+                else:
+                    print("  Clasificación: No calculada")
     
     def analisis_completo_con_restricciones(self, nombres_variables: List[str], 
                                            expresion_funcion: str, 
@@ -292,7 +510,14 @@ class OptimizadorConRestricciones:
         if self.resolver_sistema_lagrange() is None:
             return
         
-        # Paso 8: Mostrar resultados
+        # Paso 8: Calcular matriz Hessiana orlada
+        if self.calcular_hessiana_orlada() is None:
+            print("Advertencia: No se pudo calcular la matriz Hessiana orlada")
+        
+        # Paso 9: Analizar y clasificar puntos óptimos
+        self.analizar_puntos_con_restricciones()
+        
+        # Paso 10: Mostrar resultados
         self.mostrar_puntos_optimos()
 
 def mostrar_ejemplos_con_restricciones(optimizador):
