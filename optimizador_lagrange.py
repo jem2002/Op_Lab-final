@@ -1,7 +1,7 @@
 import sympy as sp
 from sympy import symbols, diff, solve, pprint, latex
-import numpy as np
 from typing import List, Dict, Tuple
+from clasificador_puntos import ClasificadorPuntos
 
 class OptimizadorConRestricciones:
     """
@@ -20,6 +20,7 @@ class OptimizadorConRestricciones:
         self.hessiana_orlada = None
         self.puntos_optimos = []
         self.clasificacion_puntos = []
+        self.clasificador = ClasificadorPuntos()
     
     def definir_variables(self, nombres_variables: List[str]):
         """
@@ -304,91 +305,10 @@ class OptimizadorConRestricciones:
             print("Error: Primero debe calcular la matriz Hessiana orlada")
             return "No clasificado"
         
-        # Extraer solo las variables originales del punto
-        vars_originales = {var: punto.get(var, var) for var in self.variables if var in punto}
-        
-        if not vars_originales:
-            return "No se pudieron extraer las variables originales"
-        
-        try:
-            # Evaluar la Hessiana orlada en el punto crítico
-            hessiana_evaluada = self.hessiana_orlada.subs(vars_originales)
-            
-            n = len(self.variables)
-            m = len(self.restricciones)
-            
-            # Para problemas con restricciones de igualdad, analizamos los menores principales
-            # de la matriz Hessiana orlada
-            
-            print(f"\nAnalizando punto con {n} variables y {m} restricciones...")
-            
-            # Calcular determinantes de submatrices relevantes
-            determinantes = []
-            
-            # Para restricciones de igualdad, necesitamos verificar los últimos (n-m) menores
-            # principales de la matriz Hessiana orlada
-            
-            for k in range(m + 1, n + m + 1):
-                submatriz = hessiana_evaluada[:k, :k]
-                try:
-                    det = float(submatriz.det())
-                    determinantes.append(det)
-                    print(f"  Determinante de submatriz {k}x{k}: {det:.6f}")
-                except Exception as e:
-                    print(f"  Error calculando determinante {k}x{k}: {e}")
-                    determinantes.append(None)
-            
-            # Análisis de los determinantes para clasificación
-            if len(determinantes) == 0:
-                return "No se pudieron calcular determinantes"
-            
-            # Filtrar determinantes válidos
-            dets_validos = [d for d in determinantes if d is not None]
-            
-            if not dets_validos:
-                return "No se pudieron evaluar los determinantes"
-            
-            # Para restricciones de igualdad:
-            # - Si los últimos (n-m) determinantes alternan en signo empezando por (-1)^m, es mínimo
-            # - Si todos tienen el mismo signo que (-1)^m, es máximo
-            # - En otros casos, es punto de silla o indeterminado
-            
-            if len(dets_validos) == 1:
-                det = dets_validos[0]
-                signo_esperado = (-1) ** m
-                if det * signo_esperado > 0:
-                    return f"Mínimo local condicionado (det={det:.6f})"
-                elif det * signo_esperado < 0:
-                    return f"Máximo local condicionado (det={det:.6f})"
-                else:
-                    return f"Criterio no concluyente (det={det:.6f})"
-            
-            else:
-                # Análisis más complejo para múltiples determinantes
-                signos = [1 if d > 0 else -1 if d < 0 else 0 for d in dets_validos]
-                
-                # Verificar patrón alternante
-                patron_minimo = True
-                patron_maximo = True
-                
-                for i, signo in enumerate(signos):
-                    signo_esperado_min = (-1) ** (m + i + 1)
-                    signo_esperado_max = (-1) ** m
-                    
-                    if signo != signo_esperado_min:
-                        patron_minimo = False
-                    if signo != signo_esperado_max:
-                        patron_maximo = False
-                
-                if patron_minimo:
-                    return f"Mínimo local condicionado (dets={dets_validos})"
-                elif patron_maximo:
-                    return f"Máximo local condicionado (dets={dets_validos})"
-                else:
-                    return f"Punto de silla o indeterminado (dets={dets_validos})"
-        
-        except Exception as e:
-            return f"Error en la clasificación: {e}"
+        return self.clasificador.clasificar_punto_con_restricciones(
+            self.hessiana_orlada, punto, self.variables,
+            len(self.restricciones), "igualdad"
+        )
     
     def analizar_puntos_con_restricciones(self):
         """
@@ -430,46 +350,22 @@ class OptimizadorConRestricciones:
             print(f"\nSolución {i}:")
             
             if isinstance(solucion, dict):
-                # Separar variables originales y multiplicadores
-                vars_originales = {}
-                multiplicadores_vals = {}
-                
-                for var, valor in solucion.items():
-                    if var in self.variables:
-                        vars_originales[var] = valor
-                    elif var in self.multiplicadores:
-                        multiplicadores_vals[var] = valor
-                
-                # Mostrar variables originales
-                print("  Variables:")
-                for var, valor in vars_originales.items():
-                    print(f"    {var} = {valor}")
-                
-                # Mostrar multiplicadores
-                print("  Multiplicadores de Lagrange:")
-                for lam, valor in multiplicadores_vals.items():
-                    print(f"    {lam} = {valor}")
-                
-                # Evaluar función objetivo en este punto
-                if vars_originales:
-                    valor_funcion = self.funcion_objetivo.subs(vars_originales)
-                    print(f"  Valor de la función objetivo: f = {valor_funcion}")
-                
-                # Verificar restricciones
-                print("  Verificación de restricciones:")
-                for j, restriccion in enumerate(self.restricciones):
-                    valor_restriccion = restriccion.subs(vars_originales)
-                    print(f"    g_{j+1} = {valor_restriccion} (debe ser ≈ 0)")
-                
-                # Mostrar clasificación si está disponible
+                # Obtener clasificación
+                clasificacion = None
                 if i-1 < len(self.clasificacion_puntos):
-                    print(f"  Clasificación: {self.clasificacion_puntos[i-1]}")
-                else:
-                    print("  Clasificación: No calculada")
+                    clasificacion = self.clasificacion_puntos[i-1]
+                
+                # Usar el clasificador para mostrar información detallada
+                self.clasificador.mostrar_punto_detallado(
+                    solucion, self.variables, self.funcion_objetivo,
+                    restricciones_igualdad=self.restricciones,
+                    multiplicadores_lambda=self.multiplicadores,
+                    clasificacion=clasificacion
+                )
     
-    def analisis_completo_con_restricciones(self, nombres_variables: List[str], 
-                                           expresion_funcion: str, 
-                                           expresiones_restricciones: List[str]):
+    def analisis_completo_con_restricciones(self, nombres_variables: List[str],
+                                            expresion_funcion: str,
+                                            expresiones_restricciones: List[str]):
         """
         Realiza el análisis completo de optimización con restricciones
         
@@ -519,107 +415,3 @@ class OptimizadorConRestricciones:
         
         # Paso 10: Mostrar resultados
         self.mostrar_puntos_optimos()
-
-def mostrar_ejemplos_con_restricciones(optimizador):
-    """
-    Muestra ejemplos predefinidos con restricciones
-    """
-    ejemplos = [
-        {
-            "nombre": "Optimización en un círculo",
-            "variables": ["x", "y"],
-            "funcion": "x + y",
-            "restricciones": ["x**2 + y**2 - 1"],
-            "descripcion": "Maximizar x+y sujeto a x²+y²=1"
-        },
-        {
-            "nombre": "Mínimo de distancia al origen",
-            "variables": ["x", "y"],
-            "funcion": "x**2 + y**2",
-            "restricciones": ["x + y - 2"],
-            "descripcion": "Minimizar x²+y² sujeto a x+y=2"
-        },
-        {
-            "nombre": "Optimización con dos restricciones",
-            "variables": ["x", "y", "z"],
-            "funcion": "x**2 + y**2 + z**2",
-            "restricciones": ["x + y + z - 3", "x - y"],
-            "descripcion": "Minimizar x²+y²+z² con x+y+z=3 y x=y"
-        },
-        {
-            "nombre": "Función de utilidad con restricción presupuestaria",
-            "variables": ["x", "y"],
-            "funcion": "x*y",
-            "restricciones": ["2*x + 3*y - 12"],
-            "descripcion": "Maximizar xy sujeto a 2x+3y=12"
-        }
-    ]
-    
-    print("\nEjemplos CON restricciones disponibles:")
-    for i, ejemplo in enumerate(ejemplos, 1):
-        print(f"{i}. {ejemplo['nombre']}")
-        print(f"   Variables: {ejemplo['variables']}")
-        print(f"   Función objetivo: {ejemplo['funcion']}")
-        print(f"   Restricciones: {ejemplo['restricciones']}")
-        print(f"   Descripción: {ejemplo['descripcion']}\n")
-    
-    try:
-        seleccion = int(input("Seleccione un ejemplo (1-4): ")) - 1
-        
-        if 0 <= seleccion < len(ejemplos):
-            ejemplo = ejemplos[seleccion]
-            print(f"\nEjecutando: {ejemplo['nombre']}")
-            optimizador.analisis_completo_con_restricciones(
-                ejemplo['variables'], 
-                ejemplo['funcion'], 
-                ejemplo['restricciones']
-            )
-        else:
-            print("Selección no válida.")
-            
-    except ValueError:
-        print("Por favor, ingrese un número válido.")
-
-def analisis_con_restricciones_interactivo(optimizador):
-    """
-    Realiza un análisis con restricciones de forma interactiva
-    """
-    try:
-        # Solicitar variables
-        print("\nIngrese las variables separadas por comas (ej: x,y,z):")
-        variables_input = input("Variables: ").strip()
-        nombres_variables = [var.strip() for var in variables_input.split(',')]
-        
-        # Solicitar función objetivo
-        print("\nIngrese la función objetivo usando las variables definidas.")
-        print("Ejemplos:")
-        print("  - x**2 + y**2")
-        print("  - x*y")
-        print("  - x**2 + 2*y**2 + 3*z**2")
-        
-        expresion_objetivo = input("\nFunción objetivo: ").strip()
-        
-        # Solicitar restricciones
-        restricciones = []
-        print("\nIngrese las restricciones de igualdad (g(x,y,...) = 0).")
-        print("Ingrese solo la parte izquierda de la ecuación (se asume = 0).")
-        print("Ejemplos:")
-        print("  - x + y - 1  (para x + y = 1)")
-        print("  - x**2 + y**2 - 4  (para x² + y² = 4)")
-        
-        while True:
-            restriccion = input(f"\nRestricción {len(restricciones)+1} (o 'fin' para terminar): ").strip()
-            if restriccion.lower() == 'fin':
-                break
-            if restriccion:
-                restricciones.append(restriccion)
-        
-        if not restricciones:
-            print("Error: Debe definir al menos una restricción.")
-            return
-        
-        # Realizar análisis
-        optimizador.analisis_completo_con_restricciones(nombres_variables, expresion_objetivo, restricciones)
-        
-    except Exception as e:
-        print(f"Error durante el análisis: {e}")

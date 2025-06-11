@@ -2,7 +2,6 @@ import customtkinter as ctk
 import tkinter as tk
 from tkinter import scrolledtext, messagebox
 import threading
-import sys
 import io
 from contextlib import redirect_stdout, redirect_stderr
 
@@ -18,7 +17,7 @@ class OptimizationGUI:
         self.root = ctk.CTk()
         self.root.title("🎯 Optimización No Lineal - Interfaz Gráfica")
         self.root.geometry("1200x800")
-        self.root.minsize(1000, 700)
+        self.root.minsize(1200, 800)
         
         self.opt_sin_restricciones = OptimizadorNoLineal()
         self.opt_lagrange = OptimizadorConRestricciones()
@@ -274,7 +273,7 @@ class OptimizationGUI:
             bg="#2b2b2b",
             fg="white",
             insertbackground="white",
-            font=("Consolas", 11),
+            font=("Consolas", 14),
             state=tk.DISABLED
         )
         self.results_text.pack(fill="both", expand=True, padx=20, pady=(0, 20))
