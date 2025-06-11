@@ -1,7 +1,8 @@
 import sympy as sp
-from sympy import symbols, diff, solve, pprint, latex
-from typing import List, Dict, Tuple
+from sympy import symbols, diff, solve
+from typing import List
 from clasificador_puntos import ClasificadorPuntos
+from formateador_didactico import FormateadorDidactico
 
 class OptimizadorConRestricciones:
     """
@@ -21,6 +22,7 @@ class OptimizadorConRestricciones:
         self.puntos_optimos = []
         self.clasificacion_puntos = []
         self.clasificador = ClasificadorPuntos()
+        self.formateador = FormateadorDidactico()
     
     def definir_variables(self, nombres_variables: List[str]):
         """
@@ -415,3 +417,13 @@ class OptimizadorConRestricciones:
         
         # Paso 10: Mostrar resultados
         self.mostrar_puntos_optimos()
+    
+    def generar_explicacion_didactica(self) -> str:
+        """
+        Genera una explicación didáctica paso a paso del problema de optimización con restricciones
+        usando el método de Multiplicadores de Lagrange.
+        
+        Returns:
+            String con la explicación didáctica completa
+        """
+        return self.formateador.generar_explicacion_completa(self, 'lagrange')

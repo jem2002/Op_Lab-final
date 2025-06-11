@@ -1,6 +1,5 @@
 import sympy as sp
-import numpy as np
-from typing import List, Dict, Tuple, Optional, Union
+from typing import List, Dict, Tuple, Union
 
 class ClasificadorPuntos:
     """

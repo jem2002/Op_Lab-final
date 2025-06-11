@@ -2,8 +2,6 @@ import customtkinter as ctk
 import tkinter as tk
 from tkinter import scrolledtext, messagebox
 import threading
-import io
-from contextlib import redirect_stdout, redirect_stderr
 
 from optimizador_sin_restricciones import OptimizadorNoLineal
 from optimizador_lagrange import OptimizadorConRestricciones
@@ -398,27 +396,31 @@ class OptimizationGUI:
         
     def _solve_optimization_thread(self, variables, objetivo, method):
         try:
-            output_buffer = io.StringIO()
+            self.progress_bar.set(0.3)
             
-            with redirect_stdout(output_buffer), redirect_stderr(output_buffer):
-                self.progress_bar.set(0.3)
-                
-                if method == "sin_restricciones":
-                    self.opt_sin_restricciones.analisis_completo(variables, objetivo)
-                elif method == "lagrange":
-                    self.opt_lagrange.analisis_completo_con_restricciones(
-                        variables, objetivo, self.restricciones_igualdad
-                    )
-                elif method == "kkt":
-                    self.opt_kkt.analisis_completo_kkt(
-                        variables, objetivo, self.restricciones_igualdad, self.restricciones_desigualdad
-                    )
-                
-                self.progress_bar.set(0.9)
+            # Primero ejecutamos el análisis completo para obtener los resultados
+            if method == "sin_restricciones":
+                self.opt_sin_restricciones.analisis_completo(variables, objetivo)
+                # Luego generamos la explicación didáctica
+                explicacion = self.opt_sin_restricciones.generar_explicacion_didactica()
+            elif method == "lagrange":
+                self.opt_lagrange.analisis_completo_con_restricciones(
+                    variables, objetivo, self.restricciones_igualdad
+                )
+                # Luego generamos la explicación didáctica
+                explicacion = self.opt_lagrange.generar_explicacion_didactica()
+            elif method == "kkt":
+                self.opt_kkt.analisis_completo_kkt(
+                    variables, objetivo, self.restricciones_igualdad, self.restricciones_desigualdad
+                )
+                # Luego generamos la explicación didáctica
+                explicacion = self.opt_kkt.generar_explicacion_didactica()
             
-            output = output_buffer.getvalue()
-            if output:
-                self.root.after(0, self.append_result, output)
+            self.progress_bar.set(0.9)
+            
+            # Mostramos la explicación didáctica en lugar de la salida cruda
+            if explicacion:
+                self.root.after(0, self.append_result, explicacion)
             else:
                 self.root.after(0, self.append_result, "✅ Optimización completada sin salida.")
             

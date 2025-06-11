@@ -1,8 +1,8 @@
 import sympy as sp
-from sympy import symbols, diff, solve, pprint, latex, And, Or
-import numpy as np
-from typing import List, Dict, Tuple, Optional
+from sympy import symbols, diff, solve
+from typing import List, Dict
 from clasificador_puntos import ClasificadorPuntos
+from formateador_didactico import FormateadorDidactico
 
 class OptimizadorKKT:
     """
@@ -24,6 +24,9 @@ class OptimizadorKKT:
         self.condiciones_kkt = []
         self.clasificacion_puntos = []
         self.clasificador = ClasificadorPuntos()
+        self.formateador = FormateadorDidactico()
+        self.candidatos_kkt = []
+        self.solucion_optima_kkt = None
     
     def definir_variables(self, nombres_variables: List[str]):
         """
@@ -924,6 +927,16 @@ class OptimizadorKKT:
         
         # Paso 12: Mostrar resultados
         self.mostrar_puntos_kkt()
+    
+    def generar_explicacion_didactica(self) -> str:
+        """
+        Genera una explicación didáctica paso a paso del problema de optimización con restricciones
+        usando las condiciones de Karush-Kuhn-Tucker (KKT).
+        
+        Returns:
+            String con la explicación didáctica completa
+        """
+        return self.formateador.generar_explicacion_completa(self, 'kkt')
 
 def analisis_kkt_interactivo(optimizador):
     """
